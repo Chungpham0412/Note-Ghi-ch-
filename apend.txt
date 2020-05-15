@@ -1,0 +1,13 @@
+ 
+Hiển thị
+<div id="lienhe"></div>
+Dữ liệu
+<div id="information_lienhe">
+lorem
+</div>
+<script type="text/javascript">
+    $(document).ready(function(){
+     $("#lienhe").append($("#information_lienhe").html());
+    });
+
+ </script>

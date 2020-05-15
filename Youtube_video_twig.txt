@@ -1,0 +1,15 @@
+<div class="m-service-youtube-video">
+    <div class="container">
+        <h3 class="title-type1">{{ module_title.title }}</h3>
+
+        <div class="row">
+            {% for data in datas %}
+                <div class="col-sm-4">
+                    <div class="videoWrapper">
+                        <iframe width="560" height="315" src="https://www.youtube.com/embed/{{ zozo.youtubeIDVideo(data.title) }}?rel=1&amp;controls=1&amp;showinfo=1" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>

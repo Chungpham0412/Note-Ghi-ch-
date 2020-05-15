@@ -1,0 +1,46 @@
+<div class="modal  load_image" tabindex="-1" role="dialog" id="spin_2020" style="z-index: 999999; padding-right: 17px; display: block;" aria-modal="true">
+  <div class="modal-dialog modal-sm" role="document">
+    <div class="modal-content">
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">×</span>
+        </button>
+                    <a href="<?php echo $href ? $href : 'javascript:void(0)'?>" rel="nofollow" target="_blank">
+                        <img src="<?php echo $background?>" width="100%" title="<?php echo $heading_title?>">
+                    </a>
+            
+    </div>
+  </div>
+</div>
+<style>
+    #spin_2020 .modal-content{
+        position:relative;
+       
+    }
+    #spin_2020 {
+        padding-top:50px;
+    }
+    #spin_2020 .close{
+        position:absolute;
+        top:-5px;
+        right:-20px;
+    }
+    @media (min-width: 576px){
+        .modal-sm {
+            max-width: 1000px;
+        }
+    }
+    @media (min-width: 768px){
+        .modal-sm {
+            width: 700px;
+        }
+    }
+
+    </style>
+<script>
+    $(document).ready(function() { 
+        setTimeout(function(){ 
+            $("#spin_2020").modal('load_image'); 
+            
+        }, 100); 
+    });
+</script>

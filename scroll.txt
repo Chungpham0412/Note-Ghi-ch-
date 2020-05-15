@@ -1,0 +1,9 @@
+<script>
+  $(document).ready(function(){ 
+    $(window).scroll(function() {
+      var scrollTop = $(window).scrollTop();
+      $("#service-scroll-<?php echo $id; ?>").stop().animate({ marginTop: scrollTop+"px"},1000)  
+      
+    });
+  })
+</script>

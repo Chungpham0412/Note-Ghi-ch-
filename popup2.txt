@@ -1,0 +1,94 @@
+<?php if(count($banners)) { ?>
+    <?php
+        $id = (isset($module)) ? $module : rand();
+        
+        /*Show on mobile*/
+        $som = 1;
+        if(isset($setting['som'])) {
+            $som = $setting['som'];
+        }
+        
+        $special_positon = array("");
+        $col_positon = array("column_left", "column_right");
+
+        if(!isset($cols) || !$cols) {
+            $cols = (isset($setting['item']) && $setting['item']) ? $setting['item'] : 5;
+        }
+
+        if(in_array($setting['position'], $special_positon)) {
+            $cols = 1;
+        }
+
+        if(in_array($setting['position'], $col_positon)) {
+            $cols = 1;
+        }
+
+        if(count($banners) < $cols) {
+            $cols = count($banners);
+        }
+
+        if((12 % $cols) == 0) {
+            $span = 12 / $cols;
+        } else {
+            $span = intval(100 / $cols);
+        }
+    ?>
+    <section class="awe-section-10 <?php echo ($som) ? '' : 'hidden-xs'; ?>" id="carousel-<?php echo $id; ?>">
+        <section class="section_service_end">
+            <div class="container">
+                <div class="row row-noGutter-2">
+                    <div class="wrap_item_srv owl-carousel owl-theme service_content"
+                         data-nav="<?php echo ($setting['navigation'] === 0) ? 'false' : 'true'; ?>" 
+                         data-dot="<?php echo ($setting['pagination'] === 0) ? 'false' : 'true'; ?>" 
+                         data-margin="15" data-loop="true" data-xs-items="2" data-sm-items="3"
+                         data-lg-items="<?php echo $cols; ?>" data-md-items="<?php echo $cols; ?>" 
+                         data-play="<?php echo ((int)$setting['autoplay'] === 0 ) ? 'false' : (int)($setting['autoplay'] * 1000); ?>">
+                        
+                            <?php foreach($banners as $k => $banner){ ?>
+                            <div class="open-popup">
+                                <div class="col-item-srv">
+                                    <div class="service_item_ed">
+                                        <a href="<?php echo $banner['link'] ? $banner['link'] : 'javascript:void(0)'; ?>" >
+                                            <img class="my-popup" src="<?php echo $banner['image']; ?>" alt="<?php echo $banner['title']; ?>" class="fa" />
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                            <?php } ?>
+                        
+                    </div>
+                </div>
+            </div>
+        </section>
+    </section>
+<?php } ?>
+
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/magnific-popup.js/1.1.0/magnific-popup.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/magnific-popup.js/1.1.0/jquery.magnific-popup.js"></script>
+
+
+<script>
+
+    $('.open-popup').magnificPopup({
+    items: [
+        <?php foreach($banners as $k => $banner){ ?>
+      {
+        src: '<?php echo $banner['image']; ?>',
+        title: '<?php echo $banner['title']; ?>'
+      },
+      <?php } ?>
+    ],
+    gallery: {
+      enabled: true
+    },
+    type: 'image' // this is a default type
+});
+
+</script>
+
+
+
+https://cdnjs.cloudflare.com/ajax/libs/magnific-popup.js/1.1.0/magnific-popup.css
+http://ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js
+https://cdnjs.cloudflare.com/ajax/libs/magnific-popup.js/1.1.0/jquery.magnific-popup.js

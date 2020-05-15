@@ -1,0 +1,18 @@
+    $(document).ready(function(){
+        function sticky_sideabr() {
+            var a = new StickySidebar('#servicr-scroll-header', {
+                topSpacing: 20,
+                bottomSpacing: 20,
+                containerSelector: '.details-product',
+                innerWrapperSelector: '#service-scroll-2'
+            });
+        }
+        setTimeout(function(){
+            sticky_sideabr();
+        }, 1000);
+
+        $('.tab-link').click(function(){
+            sticky_sideabr();
+        });
+    });
+https://daotaophunxam.edu.vn/catalog/view/theme/spa/javascript/sticky-sidebar.js

@@ -1,0 +1,5 @@
+.img_c img:hover {
+    transform: scale(1.2);
+    width: 100%;
+    transition: all 3.5s ease;
+}

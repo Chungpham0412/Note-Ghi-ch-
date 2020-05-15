@@ -1,0 +1,24 @@
+<?php
+    $id = array();
+    foreach($datas as $data){
+        preg_match('/[\\?\\&]v=([^\\?\\&]+)/', strip_tags($data['description']), $matches);
+        $id[] = $matches[1];
+        $width = '400px';
+        $height = '250px'; 
+    }
+?>
+
+<div class="service-video">
+    <div class="container">
+        <div class="row">
+            <div class="owl-carousel">
+                    <?php foreach($id as $data){ ?>
+                    <div class="items">
+                        <iframe id="ytplayer" type="text/html" width="<?php echo $width ?>" height="<?php echo $height ?>" src="https://www.youtube.com/embed/<?php echo $data ?>?rel=0&showinfo=0&color=white&iv_load_policy=3" frameborder="0" allowfullscreen></iframe> 
+                </div>
+                 <?php } ?>
+                
+            </div>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,9 @@
+<div class="fb-page" data-href="{{ config.config_setting_facebook }}" data-width="" data-height=""
+                             data-tabs="none" data-small-header="true" data-adapt-container-width="true"
+                             data-hide-cover="false" data-show-facepile="true" data-show-posts="false">
+                            <div class="fb-xfbml-parse-ignore">
+                                <blockquote cite="{{ config.config_setting_facebook }}">
+                                    <a href="{{ config.config_setting_facebook }}"></a>
+                                </blockquote>
+                            </div>
+                        </div> 

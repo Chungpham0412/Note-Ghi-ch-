@@ -1,0 +1,8 @@
+$(document).ready(function () {
+    $('.search a').click(function(){
+	$(this).parent().find('.search_input_wrap').toggle('show');
+});
+});
+
+
+tìm kiếm thêm file
