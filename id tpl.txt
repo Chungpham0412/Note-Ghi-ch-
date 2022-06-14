@@ -1,0 +1,13 @@
+<?php
+    $id              = (isset($module)) ? $module : rand();
+    $som             = (isset($setting['som'])) ? $setting['som'] : 1;
+    $special_positon = array();
+    $col_positon     = array("column_left", "column_right");
+    if (!isset($attr_id) || !$attr_id) {
+        $attr_id = 'news_category_custom';
+    }
+?>
+<?php if($special_positon){ ?>
+<!--View Not Found-->
+<?php }else{ ?>
+<div class="<?php echo $attr_id?> <?php echo $som ? '' : 'hidden-xs'?>" id="<?php echo $attr_id?>-<?php echo $id?>">

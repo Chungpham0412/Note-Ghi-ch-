@@ -1,0 +1,1 @@
+{{ zozo.getImage(module_image,442,253) }}

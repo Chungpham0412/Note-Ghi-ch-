@@ -1,0 +1,32 @@
+<?php
+    $id = array();
+    foreach($datas as $data){
+        preg_match('/[\\?\\&]v=([^\\?\\&]+)/', strip_tags($data['description']), $matches);
+        $id[] = $matches[1];
+        $width = '400px';
+        $height = '250px'; 
+    }
+?>
+	<section class="section-video">
+	<div class="container">
+		<div class="section-head">
+            <span class="group-icon"><i class="fa fa-dashcube" aria-hidden="true"></i></span>
+            <h2><?php echo $heading_title;?></h2>
+        </div>
+		<div class="section-video__list list-video">
+        
+            <div class="owl-carousel owl-theme" data-lg-items='2' data-md-items='2' data-sm-items='2' data-xs-items="1" data-xss-items="1" data-margin='10' data-nav="true" data-dot="false">
+                <?php foreach($id as $data){ ?>
+    			<div class="item" title="" >
+    				<a data-fancybox data-type="iframe" data-src="https://www.youtube.com/embed/<?php echo $data ?>" href="javascript:;">
+    					<img src="https://img.youtube.com/vi/<?php echo $data ?>/sddefault.jpg" />
+    				</a>
+    			</div>
+    			 <?php } ?>
+    		</div>
+			
+		</div>
+	</div>
+</section>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js" integrity="sha512-uURl+ZXMBrF4AwGaWmEetzrd+J5/8NRkWAvJx5sbPSSuOb0bZLqf+tOzniObO00BjHa/dD7gub9oCGMLPQHtQA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" integrity="sha512-H9jrZiiopUdsLpg94A333EfumgUBpO9MdbxStdeITo+KEIMaNfHNvwyjjDJb+ERPaRS6DpyRlKbvPUasNItRyw==" crossorigin="anonymous" referrerpolicy="no-referrer" />

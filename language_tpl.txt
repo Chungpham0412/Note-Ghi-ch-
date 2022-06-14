@@ -1,0 +1,27 @@
+
+
+<?php if (count($languages) > 1) { ?>
+      
+    <form action="<?php echo $action; ?>" method="post" enctype="multipart/form-data" class="form-language" id="form-language" style="margin-bottom:0">
+          <?php foreach ($languages as $language) { ?>
+            <?php if ($language['code'] != $code) { ?>
+            <a class="language-select" href="javascript:void(0)" name="<?php echo $language['code']; ?>">
+                <img src="catalog/language/<?php echo $language['code']; ?>/<?php echo $language['code']; ?>.png"
+                     alt="<?php echo $language['name']; ?>" title="<?php echo $language['name']; ?>" />
+                <span><?php echo $language['name']; ?></span>
+                </a>
+            <?php } ?>
+        <?php } ?>
+        <input type="hidden" name="code" value="" />
+        <input type="hidden" name="redirect" value="<?php echo $redirect; ?>" />
+    </form>
+<?php } ?>
+<script>
+    $(document).ready(function(){
+        $('.language-select').on('click', function (e) {
+            e.preventDefault();
+            $(this).closest('#form-language').find('input[name=\'code\']').attr('value', $(this).attr('name'));
+            $(this).closest('#form-language').submit();
+        }); 
+    });
+</script>

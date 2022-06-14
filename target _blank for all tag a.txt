@@ -1,0 +1,8 @@
+<!--<script>
+    $(function(){
+        $('a:not([href^="#"]').click(function(){
+            window.open(this.href);
+            return false;
+        });
+    });
+</script>-->

@@ -1,0 +1,1218 @@
+<?php
+
+namespace Chanel;
+require_once DIR_SYSTEM . 'library/log.php';
+class Kiotviet
+{
+    // private $prefix        = 'kiotviet_';
+    public $error = array();
+    public $url = 'https://public.kiotapi.com';
+    public $filename = DIR_LOGS . 'kiotviet.log';
+
+    private $products = array();
+    private $double = array();
+    private $retailer = '';
+    private $client_id = '';
+    private $client_secret = '';
+    private $authorization = '';
+    private $curl, $db, $config, $languages, $cache, $current_lang, $load, $registry;
+    private $model_catalog_product, $model_localisation_language, $model_catalog_category,
+        $model_localisation_stock_status, $model_catalog_option, $model_catalog_attribute_group,
+        $model_catalog_attribute, $model_catalog_manufacturer, $model_localisation_length_class,
+        $model_localisation_weight_class, $model_setting_store;
+
+    public function __construct($registry)
+    {
+        $this->config = $registry->get('config');
+        $this->load = $registry->get('load');
+
+        $this->cache = new \Cache($this->config->get('cache_type'), $this->config->get('cache_expire'));
+        $this->curl = new \cURL();
+        $this->db = new \DB($this->config->get('db_type'), $this->config->get('db_hostname'),
+            $this->config->get('db_username'), $this->config->get('db_password'),
+            $this->config->get('db_database'), $this->config->get('db_port'));
+
+        $this->retailer = $this->config->get('kiotviet_retailer');
+        $this->client_id = $this->config->get('kiotviet_client_id');
+        $this->client_secret = $this->config->get('kiotviet_client_secret');
+        $this->branch_id = $this->config->get('kiotviet_branch');
+        $this->user_id = $this->config->get('kiotviet_user');
+
+        $this->authorization = 'Bearer ' . $this->getAccessToken();
+
+        $this->registry = $registry;
+    }
+
+    /**
+     * @return array
+     */
+    public function syncProducts($products = array())
+    {
+        // Tai cac file thanh phan
+        $this->load->model('catalog/product', 'admin');
+        $this->model_catalog_product = $this->registry->get('model_catalog_product');
+
+        $this->load->model('catalog/category', 'admin');
+        $this->model_catalog_category = $this->registry->get('model_catalog_category');
+
+        $this->load->model('catalog/option', 'admin');
+        $this->model_catalog_option = $this->registry->get('model_catalog_option');
+
+        $this->load->model('catalog/attribute_group', 'admin');
+        $this->model_catalog_attribute_group = $this->registry->get('model_catalog_attribute_group');
+
+        $this->load->model('catalog/attribute', 'admin');
+        $this->model_catalog_attribute = $this->registry->get('model_catalog_attribute');
+
+        $this->load->model('catalog/manufacturer', 'admin');
+        $this->model_catalog_manufacturer = $this->registry->get('model_catalog_manufacturer');
+
+        $this->load->model('localisation/language', 'admin');
+        $this->model_localisation_language = $this->registry->get('model_localisation_language');
+
+        $this->load->model('localisation/stock_status', 'admin');
+        $this->model_localisation_stock_status = $this->registry->get('model_localisation_stock_status');
+
+        $this->load->model('localisation/length_class', 'admin');
+        $this->model_localisation_length_class = $this->registry->get('model_localisation_length_class');
+
+        $this->load->model('localisation/weight_class', 'admin');
+        $this->model_localisation_weight_class = $this->registry->get('model_localisation_weight_class');
+
+        $this->load->model('setting/store', 'admin');
+        $this->model_setting_store = $this->registry->get('model_setting_store');
+
+        $this->languages = $this->model_localisation_language->getLanguages();
+        $this->current_lang = $this->model_localisation_language->getLanguageByCode($this->config->get('config_language'));
+        $products = $this->getProducts();
+        $this->products = $products;
+
+        $this->log('sync_product', sprintf('-- Start sync %s products', count($products)));
+
+        foreach ($products as $key => $product) {
+            $category = array('categoryName' => trim($product['categoryName']));
+
+            $category_id = $this->addCategory($category);
+            $product['product_category'][] = $category_id;
+
+            $this->syncProduct($product);
+        }
+
+        return $this->error;
+    }
+
+    /**
+     * @param $order
+     * @return int|mixed
+     */
+    private function getOrderShippingFee($order)
+    {
+        if (!isset($order['totals']) || !is_array($order['totals'])) {
+            return 0;
+        }
+
+        $price = 0;
+        foreach ($order['totals'] as $total) {
+            if ($total['code'] != 'shipping') {
+                continue;
+            }
+            $price += $total['value'];
+        }
+
+        return $price;
+    }
+
+    /**
+     * @param $order
+     * @return bool|mixed|string
+     */
+    public function createOrder($order)
+    {
+        $input = array();
+        $input['createdDate'] = date('Y-m-d H:i:s');
+        $input['purchaseDate'] = date('Y-m-d H:i:s');
+        $input['branchId'] = (int)$this->getBranch();
+        $input['soldById'] = (int)$this->getUser();
+        $input['cashierId'] = '';
+        $input['discount'] = $this->getDiscountValue($order);
+        $input['description'] = $order['comment'];
+
+        $input['method'] = '';
+        $input['totalPayment'] = 0;
+        $input['makeInvoice'] = false;
+        $input['accountId'] = '';
+
+        $input['orderDetails'] = array();
+
+        $this->products = $this->getProducts();
+
+        foreach ($order['products'] as $_product) {
+            $k_products = array();
+            if ($_product['model'] && $_product['option']) {
+                // get parent of this option by model
+                $parent = $this->products[$_product['model']];
+
+                // if parent exist
+                if (isset($parent['id'])) {
+                    // get all kiotviet's products that have masterProductId = $parent['id'], use their id as key
+                    $k_products = $this->_searchArray($this->products, array(array('key' => 'masterProductId', 'value' => $parent['id'])));
+                    // get all kiotviet's products that have masterUnitId = $parent['id'], use their id as key
+                    $childrenUnit = $this->_searchArray($this->products, array(array('key' => 'masterUnitId', 'value' => $parent['id'])));
+
+                    // merger childrenUnit into k_products, same product (same key = id) will be overwrite
+                    foreach ($childrenUnit as $key => $child) {
+                        $k_products[$key] = $child;
+                    }
+                    // add parent product into array
+                    $k_products[$parent['code']] = $parent;
+                }
+
+                // if have product related the product by id, mean k_products has data
+                if ($k_products) {
+                    /* Idea
+                    loop all option of this product
+                    get all products, that have this option, in $k_products
+                    */
+                    foreach ($_product['option'] as $count => $option) {
+                        $temp_k_product = array();
+
+                        foreach ($k_products as $k_key => $_k_product) {
+                            // check if the option is kiotviet's unit or kiotviet's attributes
+                            if (isset($parent['unit']) && ($parent['unit'] == $option['name']) && ($_k_product['unit'] == $option['value'])) {
+                                $temp_k_product[] = $_k_product;
+                            } else if (isset($_k_product['attributes'])) {
+                                // find id of option['name'] (color/size/...) in the _k_product['attributes']['attributeName']
+                                $attributeName = array_search($option['name'], array_column($_k_product['attributes'], 'attributeName'));
+                                // find id of option['value'] (s/m/l/red/green/...) in the _k_product['attributes']['attributeValue']
+                                $attributeValue = array_search($option['value'], array_column($_k_product['attributes'], 'attributeValue'));
+                                // if attributeName and attributeValue exist and have same value,
+                                // that mean this _k_product is what you need
+                                if ($attributeName !== false && $attributeValue !== false && $attributeValue == $attributeName)
+                                    $temp_k_product[] = $_k_product;
+                            }
+                        }
+                        // rewrite the k_products
+                        $k_products = $temp_k_product;
+                    }
+                }
+            }
+
+            // check if k_products has any product left
+            if (count($k_products)) {
+                // k_products is still array content product, we just need the first one
+                $k_products = $k_products[0];
+
+                // calc price and discount for the product
+                if ($_product['price'] != $k_products['basePrice']) {
+                    $_product['discount'] = $k_products['basePrice'] - $_product['price'];
+                    $_product['price'] = $k_products['basePrice'];
+                    $_product['discountRatio'] = $_product['discount'] / $_product['price'] * 100;
+                }
+            }
+
+            // add product into array for json later
+            $input['orderDetails'][] = array(
+                'productCode' => isset($k_products['code']) ? $k_products['code'] : $_product['model'],
+                'productName' => $_product['name'],
+                'quantity' => $_product['quantity'],
+                'price' => $_product['price'],
+                'discount' => isset($_product['discount']) ? $_product['discount'] : 0,
+                'discountRatio' => isset($_product['discountRatio']) ? $_product['discountRatio'] : 0
+            );
+        }
+
+        // the rest part is add more data and push request to kiotviet
+        // it will responsive if order is susscess
+        $input['customer'] = array();
+        $input['customer']['code'] = '';
+        $input['customer']['name'] = trim($order['firstname'] . ' ' . $order['lastname']);
+        $input['customer']['contactNumber'] = $order['telephone'];
+        $input['customer']['address'] = trim($order['payment_address_1'] . ' ' . $order['payment_address_2']);
+
+        $input['payments'] = array();
+        $input['payments']['method'] = (isset($order['payment_code']) && $order['payment_code'] == 'bank_transfer') ? 'transfer' : '';
+
+        $orderDelivery = array();
+        $orderDelivery['deliveryCode'] = '';
+        $orderDelivery['price'] = $this->getOrderShippingFee($order);
+        $orderDelivery['receiver'] = trim($order['firstname'] . ' ' . $order['lastname']);
+        $orderDelivery['contactNumber'] = $order['telephone'];
+        $orderDelivery['address'] = $order['shipping_address_1'];
+        $orderDelivery['locationId'] = '';
+        $orderDelivery['locationName'] = $order['shipping_country'];
+        $orderDelivery['weight'] = 0;
+        $orderDelivery['length'] = 0;
+        $orderDelivery['width'] = 0;
+        $orderDelivery['height'] = 0;
+        $orderDelivery['partnerDeliveryId'] = '';
+
+        $orderDelivery['partnerDelivery'] = array(
+            'code' => $order['shipping_code'],
+            'name' => $order['shipping_method'],
+            'address' => '',
+            'contactNumber' => '',
+            'email' => ''
+        );
+        $input['orderDelivery'] = $orderDelivery;
+
+        $url = $this->url . '/orders';
+        $params['header'] = array(
+            'Content-Type: application/json',
+            'Retailer: ' . $this->retailer,
+            'Authorization: ' . $this->authorization
+        );
+        $params['exception'] = true;
+
+        $resp = $this->curl->post($url, json_encode($input), $params);
+        $resp = json_decode($resp);
+
+        if(isset($resp->code)) {
+            $this->log('create_order', sprintf('Success [%s]', $resp->code));
+        }
+        else {
+            $error = isset($resp->responseStatus->message) ? $resp->responseStatus->message : 'Cannot create an order';
+            $this->log('create_order', sprintf('Error [%s]', $error));
+        }
+
+        return $resp;
+    }
+
+    /*========= order function =========*/
+    /**
+     * @param $order
+     * @return float|int
+     */
+    private function getDiscountValue($order)
+    {
+        if (!isset($order['totals']) || !is_array($order['totals'])) {
+            return 0;
+        }
+        foreach ($order['totals'] as $total) {
+            if ($total['code'] == 'coupon') {
+                return floatval(preg_replace('/\D/', '', $total['value']));
+            }
+        }
+        return 0;
+    }
+
+    /*========= category function =========*/
+    /**
+     * @param $data
+     * @return mixed
+     */
+    private function addCategory($data)
+    {
+        $_category = $this->model_catalog_category->getCategoryByName($data['categoryName']);
+        if (isset($_category['category_id']) && $_category['category_id'] > 0) {
+            return $_category['category_id'];
+        }
+
+        $category = array();
+        $category['category_description'] = array();
+
+        foreach ($this->languages as $language) {
+            $category['category_description'][$language['language_id']] = array(
+                'name' => $data['categoryName'],
+                'description' => '',
+                'meta_title' => '',
+                'meta_description' => '',
+                'meta_title' => '',
+            );
+        }
+
+        $category['parent_id'] = 0;
+        $category['category_store'][] = 0;
+
+        $stores = $this->model_setting_store->getStores();
+
+        if (!empty($stores)) {
+            foreach ($stores as $store) {
+                $category['category_store'][] = $store['store_id'];
+            }
+        }
+
+        $category['image'] = '';
+        $category['column'] = '';
+        $category['sort_order'] = 0;
+        $category['status'] = 1;
+
+        $category['category_layout'] = array();
+        $category['category_layout'][0] = '';
+
+        if (!empty($stores)) {
+            foreach ($stores as $store) {
+                $category['category_layout'][$store['store_id']] = '';
+            }
+        }
+
+        $languages = $this->model_localisation_language->getLanguages();
+        if (!count($stores)) {
+            $stores[] = 0;
+        }
+
+        $category['category_seo_url'] = array();
+        foreach ($stores as $store_id => $val) {
+            foreach ($languages as $language) {
+                $category['category_seo_url'][$store_id][$language['language_id']] = url_title(convert_vi_to_en($data['categoryName']));
+            }
+        }
+
+        return $this->model_catalog_category->addCategory($category);
+    }
+
+    /*========= product function =========*/
+    /**
+     * @param $data
+     */
+    private function syncProduct($data)
+    {
+        // $lang = $this->model_localisation_language->getLanguageByCode($this->config->get('config_language'));
+        $product = array();
+
+        // add description
+        $product['product_description'] = array();
+        foreach ($this->languages as $language) {
+            $product['product_description'][$language['language_id']] = array(
+                'name' => html_entity_decode($data['name']),
+                'description_short' => '',
+                'description' => isset($data['description']) ? $data['description'] : '',
+                'meta_title' => '',
+                'meta_description' => '',
+                'tag' => ''
+            );
+        }
+
+        $product['model'] = $data['code'];
+
+        $this->load->model('setting/store');
+
+        $stores = $this->model_setting_store->getStores();
+        $languages = $this->model_localisation_language->getLanguages();
+        if (!count($stores)) {
+            $stores[] = 0;
+        }
+
+        $product['product_seo_url'] = array();
+        foreach ($stores as $store_id => $val) {
+            foreach ($languages as $language) {
+                $product['product_seo_url'][$store_id][$language['language_id']] = url_title(convert_vi_to_en($data['name']));
+            }
+        }
+
+        // Add product images
+        $product['product_image'] = array();
+
+        if (isset($data['images']) && !empty($data['images'])) {
+            // addition image
+            foreach ($data['images'] as $k => $image) {
+                if($k == 0) {
+                    // product avatar
+                    $product['image'] = $this->getImage($image);
+                }
+                else {
+                    $product['product_image'][] = array(
+                        'image' => $this->getImage($image),
+                        'sort_order' => 1
+                    );
+                }
+            }
+        } else {
+            $product['image'] = '';
+        }
+
+        $product['price'] = $data['basePrice'];
+        $product['quantity'] = $data['onHand'];
+        $product['minimum'] = 1;
+        $product['status'] = $data['isActive']/* && $data['onHand'] > 0*/ ? 1 : 0;
+        $product['sku'] = '';
+        $product['location'] = (isset($data['branchName']) && $data['branchName']) ? $data['branchName'] : '';
+        $product['tax_class_id'] = 0;
+        $product['subtract'] = 1;
+        $product['stock_status_id'] = 0;
+
+        $stock_statuses = $this->model_localisation_stock_status->getStockStatuses();
+
+        if (!empty($stock_statuses)) {
+            $product['stock_status_id'] = $stock_statuses[0]['stock_status_id'];
+        }
+
+        $product['shipping'] = 1;
+        $product['date_available'] = date('Y-m-d H:i:s', strtotime($data['createdDate']));
+        $product['length'] = '';
+        $product['width'] = '';
+        $product['height'] = '';
+        $product['length_class_id'] = 1;
+
+        $length_classes = $this->model_localisation_length_class->getLengthClasses();
+        if (!empty($length_classes)) {
+            $product['length_class_id'] = $length_classes[0]['length_class_id'];
+        }
+
+        $product['weight'] = '';
+        $product['weight_class_id'] = 1;
+        $weight_classes = $this->model_localisation_weight_class->getWeightClasses();
+        if (!empty($weight_classes)) {
+            $product['weight_class_id'] = $weight_classes[0]['weight_class_id'];
+        }
+
+        $product['sort_order'] = 1;
+        $product['upc'] = 1;
+        $product['ean'] = 1;
+        $product['jan'] = 1;
+        $product['isbn'] = 1;
+        $product['mpn'] = 1;
+
+        $product['product_store'] = array();
+        $product['product_store'][] = 0;
+
+        $stores = $this->model_setting_store->getStores();
+
+        if (!empty($stores))
+            foreach ($stores as $store) {
+                $product['product_store'][] = $store['store_id'];
+            }
+
+        $product['manufacturer'] = (isset($data['tradeMarkName']) && $data['tradeMarkName']) ? $data['tradeMarkName'] : '';
+        // function addManufacturer down there, nothing's special
+        $product['manufacturer_id'] = $this->addManufacturer($product['manufacturer'], $product['product_store']);
+
+        $product['download'] = array();
+        $product['related'] = array();
+        $product['option'] = '';
+        $product['points'] = array();
+        $product['product_reward'] = array('1' => array('points' => ''));
+
+        $product['product_layout'] = array();
+        $product['product_layout'][0] = '';
+
+        if (!empty($stores))
+            foreach ($stores as $store) {
+                $product['product_layout'][$store['store_id']] = '';
+            }
+
+        if (isset($data['product_category'])) {
+            $product['product_category'] = $data['product_category'];
+        }
+
+        $product['product_option'] = array();
+
+        // ADD PRODUCT ATTRIBUTE
+        if (isset($data['attributes']) && $data['attributes']) {
+            foreach ($data['attributes'] as $attributes) {
+                $opt['price'] = $data['basePrice'];
+                $opt['quantity'] = $data['onHand'];
+
+                $attributeValue = array();
+                $attributeValue[] = array(
+                    'id' => $data['id'],
+                    'code' => $data['code'],
+                    'name' => $data['name'],
+                    'fullName' => $data['fullName'],
+                    'unit' => $attributes['attributeValue'],
+                    'basePrice' => $data['basePrice'],
+                    'conversionValue' => '1',
+                );
+
+                $option = $this->getOptionGroupData($attributes['attributeName']);
+                $product['product_option'][] = $this->addOptionToProduct($option, $attributeValue, $opt)[0];
+            }
+
+            /*
+            if (!isset($data['masterProductId']) || !$data['masterProductId']) {
+                $product['product_attribute'] = $this->addAttribute($data['attributes'], $data['attribute_group_id'], $lang);
+            }
+            */
+        }
+
+        // ADD OPTION
+        if (isset($data['unit']) && isset($data['units'])) {
+            $opt['price'] = $data['basePrice'];
+            $opt['quantity'] = $data['onHand'];
+            $opt['model'] = $data['code'];
+            $opt['images'] = $data['images'];
+
+            foreach ($languages as $language) {
+                $product['product_seo_url'][$store_id][$language['language_id']] = url_title(convert_vi_to_en($data['name']));
+            }
+
+            $option_value = $data['conversionValue'] . $data['unit'];
+
+            if (is_array($data['unit'])) {
+                foreach ($data['unit'] as $unit) {
+                    $option = $this->getOptionGroupData($unit);
+                }
+            } else {
+                $option = $this->getOptionGroupData($data['unit']);
+            }
+
+            $option_value_name = trim($data['conversionValue'].' '. $data['unit']);
+
+            // seach for option value
+            $option_value = $this->model_catalog_option->getOptionValueByName($option_value_name);
+            
+            // add option value and add product option
+            if (!isset($option_value['option_value_id'])) {
+                $_option_value_item = array();
+                $_option_value_item['option_value_id'] = 0;
+                $_option_value_item['image'] = '';
+                $_option_value_item['sort_order'] = 1;
+                $_option_value_item['option_value_description'][$this->current_lang['language_id']]['name'] = $option_value_name;
+                $option_value['option_value_id'] = $this->model_catalog_option->addOptionValue($_option_value_item, $option['option_id']);
+            }
+
+            //add to table product option
+            $product_option_value = array();
+            if(isset($option_value['option_value_id'])){
+                $product_option_value['add_option_value'] = array(
+                    $option['option_id'] => $option_value['option_value_id']
+                );
+
+                $product_option_value['image'] = $data['images'];
+                $product_option_value['model'] = $data['code'];
+                $product_option_value['price'] = $data['basePrice'];
+                $product_option_value['specials'] = 0;
+            }
+
+            $temp = $this->addOptionToProduct($option, $data['units'], $opt);
+            array_push($temp, $product_option_value);
+            $product['add_product_option'] =  $temp;
+
+            // if ($product['product_option']) {
+            //     $product['product_option'] = array_merge($product['product_option'], $temp);
+            // }
+        }
+
+        // check if product is child in kiotviet units
+        /*if (in_array($data['code'], $this->double)) {
+            return;
+        }*/
+        if ((isset($data['masterProductId']) && $data['masterProductId']) || (isset($data['masterUnitId']) && $data['masterUnitId'])) {
+            $masterId = (isset($data['masterProductId']) && $data['masterProductId']) ? $data['masterProductId'] : $data['masterUnitId'];
+
+            // get parent product from kiotviet
+            $masterProduct = $this->products[array_search($masterId, array_column($this->products, 'id'))];
+            $product['status'] = 0;
+            if (isset($masterProduct['code'])) {
+                // get data parent in database by kiotviet product code
+                $masterProduct = $this->model_catalog_product->getProductByModel($masterProduct['code'], '*');
+                // $masterProductId = $masterProduct['product_id'];
+                if (isset($masterProduct['product_id'])) {
+                    $product['parent_id'] = (isset($masterProduct['product_id'])) ? $masterProduct['product_id'] : 0;
+
+                    // $masterProduct                        = $this->model_catalog_product->getProductDetail($masterProduct['product_id']);
+                    // $masterProduct['product_attribute']   = $this->model_catalog_product->getProductAttributes($masterProduct['product_id']);
+                    $masterProduct['product_description'] = $this->model_catalog_product->getProductDescriptions($masterProduct['product_id']);
+                    $masterProduct['product_image'] = $this->model_catalog_product->getProductImages($masterProduct['product_id']);
+                    $masterProduct['product_option'] = $this->model_catalog_product->getProductOptions($masterProduct['product_id']);
+
+                    foreach ($data['attributes'] as $attributes) {
+                        /*$attribute_temp    = $this->model_catalog_attribute->getAttributeByName(trim($attributes['attributeName']));
+                        foreach ($masterProduct['product_attribute'] as $attrkey => $masterProductattribute) {
+                            if ($masterProductattribute['attribute_id'] == $attribute_temp['attribute_id']) {
+                                foreach ($this->languages as $language) {
+                                    $masterProduct['product_attribute'][$attrkey]['product_attribute_description'][$language['language_id']]['text'] .= ' - ' . $attributes['attributeValue'];
+                                }
+                            }
+                        }*/
+
+                        $opt['price'] = $masterProduct['price'];
+                        $opt['quantity'] = $data['onHand'];
+
+                        $attributeValue = array();
+                        $attributeValue[] = array(
+                            'id' => $data['id'],
+                            'code' => $data['code'],
+                            'name' => $data['name'],
+                            'fullName' => $data['fullName'],
+                            'unit' => $attributes['attributeValue'],
+                            'basePrice' => $data['basePrice'],
+                            'conversionValue' => '1',
+                        );
+
+                        $option = $this->getOptionGroupData($attributes['attributeName']);
+                        $temp = $this->addOptionToProduct($option, $attributeValue, $opt)[0];
+
+                        // get index if the temp exist in master product option groups
+                        if (($option_key = array_search($temp['option_id'], array_column($masterProduct['product_option'], 'option_id'))) !== false) {
+                            if (array_search($temp['product_option_value'][0]['option_value_id'], array_column($masterProduct['product_option'][$option_key]['product_option_value'], 'option_value_id')) === false && $temp['product_option_value'][0]['option_id'] == $masterProduct['product_option'][$option_key]['option_id']) {
+                                $masterProduct['product_option'][$option_key]['product_option_value'] = array_merge($masterProduct['product_option'][$option_key]['product_option_value'], $temp['product_option_value']);
+                            }
+                        } else {
+                            $masterProduct['product_option'][] = $temp;
+                        }
+                    }
+                    $masterProduct['product_category'] = $this->model_catalog_product->getProductCategories($masterProduct['product_id']);
+                    $masterProduct['product_discount'] = $this->model_catalog_product->getProductDiscounts($masterProduct['product_id']);
+                    $masterProduct['product_related'] = $this->model_catalog_product->getProductRelated($masterProduct['product_id']);
+                    $masterProduct['product_reward'] = $this->model_catalog_product->getProductRewards($masterProduct['product_id']);
+                    $masterProduct['product_special'] = $this->model_catalog_product->getProductSpecials($masterProduct['product_id']);
+                    $masterProduct['product_download'] = $this->model_catalog_product->getProductDownloads($masterProduct['product_id']);
+                    $masterProduct['product_layout'] = $this->model_catalog_product->getProductLayouts($masterProduct['product_id']);
+                    $masterProduct['product_store'] = $this->model_catalog_product->getProductStores($masterProduct['product_id']);
+                    $masterProduct['product_recurrings'] = $this->model_catalog_product->getRecurrings($masterProduct['product_id']);
+                    $masterProduct['keyword'] = '';
+
+                    // pr($masterProduct);
+
+                    // $this->model_catalog_product->editProduct($masterProduct['product_id'], $masterProduct);
+                }
+            }
+        } else {
+            $product['parent_id'] = 0;
+        }
+
+        // check product exist in database
+        if (isset($data['code'])
+            && ($p = $this->model_catalog_product->getProductByModel($data['code'], '*'))
+        ) {
+            // Keep image field up to date
+            if(strlen($p['image'])) {
+                $product['image'] = $p['image'];
+            }
+
+            // Keep image fields up to date
+            $product_images = $this->model_catalog_product->getProductImages($p['product_id']);
+            if(count($product_images)) {
+                $product['product_image'] = array();
+            }
+
+            foreach ($product_images as $product_image) {
+                $product['product_image'][] = array(
+                    'image' => $product_image['image'],
+                    'sort_order' => $product_image['sort_order']
+                );
+            }
+
+            $product_description = $this->model_catalog_product->getProductDescriptions($p['product_id']);
+            // $product['product_description'] = $product_description;
+
+            // Keep description fields up to date
+            foreach ($product_description as $language_id => $description) {
+                foreach ($description as $key => $value) {
+                    if (!strlen(trim(strip_tags(html_entity_decode($description[$key]))))) {
+                        continue;
+                    }
+
+                    $product['product_description'][$language_id][$key] =
+                        $product_description[$language_id][$key];
+                }
+            }
+
+            $product['product_discount'] = $this->model_catalog_product->getProductDiscounts($p['product_id']);
+            $product['product_related'] = $this->model_catalog_product->getProductRelated($p['product_id']);
+            $product['product_reward'] = $this->model_catalog_product->getProductRewards($p['product_id']);
+            $product['product_special'] = $this->model_catalog_product->getProductSpecials($p['product_id']);
+            $product['product_download'] = $this->model_catalog_product->getProductDownloads($p['product_id']);
+            $product['product_layout'] = $this->model_catalog_product->getProductLayouts($p['product_id']);
+            $product['product_store'] = $this->model_catalog_product->getProductStores($p['product_id']);
+            $product['product_recurrings'] = $this->model_catalog_product->getRecurrings($p['product_id']);
+
+            $this->log('sync_product', sprintf('Update product [%s]', $product['model']));
+            // pr($product);
+            // $this->model_catalog_product->editProduct($p['product_id'], $product);
+        } else {
+            $this->log('sync_product', sprintf('add new product [%s]', $product['model']));
+            $this->model_catalog_product->addProduct($product);
+        }
+    }
+
+    /**
+     * @param $data
+     * @return array
+     */
+    private function getOptionGroupData($data)
+    {
+        $option = $this->model_catalog_option->getOptionByName(trim($data));
+
+        if (!isset($option['option_id'])) {
+            $option = array();
+            $option['type'] = 'radio';
+            $option['sort_order'] = 0;
+            $option['option_description'][$this->current_lang['language_id']] = array();
+            $option['option_description'][$this->current_lang['language_id']]['name'] = trim($data);
+            $option['option_id'] = $this->model_catalog_option->addOption($option);
+        } else {
+            $option['option_description'][$this->current_lang['language_id']] = array();
+            $option['option_description'][$this->current_lang['language_id']]['name'] = $option['name'];
+        }
+
+        return $option;
+    }
+
+    /**
+     * @param $option
+     * @param $option_item
+     * @param $product
+     * @return array
+     */
+    private function addOptionToProduct($option, $option_item, $product)
+    {
+        $return_option = array();
+
+        // check option group
+        if ($option) {
+            // check option value
+            if (count($option_item)) {
+                // Add product option value
+                // $product_option_item = array();
+                // $product_option_item['type'] = $option['type'];
+                // $product_option_item['product_option_id'] = '';
+                // $product_option_item['option_id'] = $option['option_id'];
+                // $product_option_item['required'] = (isset($product['quantity']) && $product['quantity']) ? 1 : 0;
+                // $product_option_item['product_option_value'] = array();
+
+                foreach ($option_item as $pok => $product_option) {
+                    // Add product option item
+                    $product_option_item[] = $this->addOptionItem($option, $product_option, $product);
+                }
+
+                $return_option = $product_option_item;
+            }
+        }
+        return $return_option;
+    }
+
+    /**
+     * @param $group_id
+     * @param $item_data
+     * @param $product
+     * @return array
+     */
+    private function addOptionItem($option, $item_data, $product)
+    {
+        $product_option_value = array();
+        $product_price = (isset($product['price'])) ? $product['price'] : 0;
+        $product_quantity = (isset($product['quantity'])) ? $product['quantity'] : 0;
+        $specials = (isset($product['specials'])) ? $product['specials'] : 0;
+        $option_value_name = trim($item_data['conversionValue'].' '. $option['name'] .' ('. $item_data['unit'] .')');
+
+        $this->double[] = $item_data['code'];
+
+        // seach for option value
+        $option_value = $this->model_catalog_option->getOptionValueByName($option_value_name);
+
+        // creat value if don't have
+        if (!isset($option_value['option_value_id'])) {
+            $_option_value_item = array();
+            $_option_value_item['option_value_id'] = 0;
+            $_option_value_item['image'] = '';
+            $_option_value_item['sort_order'] = 1;
+            $_option_value_item['option_value_description'][$this->current_lang['language_id']]['name'] = $option_value_name;
+            $option_value['option_value_id'] = $this->model_catalog_option->addOptionValue($_option_value_item, $option['option_id']);
+        }
+
+        if(isset($option_value['option_value_id'])){
+            $product_option_value['add_option_value'] = array(
+                $option['option_id'] => $option_value['option_value_id']
+            );
+    
+            $product_option_value['image'] = $product['image'];
+            $product_option_value['model'] = $product['model'];
+            $product_option_value['price'] = $product_price;
+            $product_option_value['specials'] = $specials;
+        }
+
+        // $product_option_value['product_option_value_id'] = 0;
+        // $product_option_value['product_option_id'] = 0;
+        // $product_option_value['option_id'] = $group_id;
+        // $product_option_value['option_value_id'] = $option_value['option_value_id'];
+        // $product_option_value['quantity'] = $product_quantity;
+        // $product_option_value['subtract'] = $product_quantity ? 1 : 0;
+        // $product_option_value['price_prefix'] = ($item_data['basePrice'] < $product_price) ? '-' : '+';
+        // $product_option_value['price'] = abs($item_data['basePrice'] - $product_price);
+        // $product_option_value['points_prefix'] = '+';
+        // $product_option_value['points'] = 0;
+        // $product_option_value['weight_prefix'] = '+';
+        // $product_option_value['weight'] = 0;
+
+        return $product_option_value;
+    }
+
+    /**
+     * @param $manufacturer
+     * @param array $product_store
+     * @return int
+     */
+    private function addManufacturer($manufacturer, $product_store = array())
+    {
+        if ($manufacturer) {
+            $_manufacturer = $this->model_catalog_manufacturer->getManufacturerByName($manufacturer);
+
+            if (!isset($_manufacturer['manufacturer_id'])) {
+                $_manufacturer['name'] = $manufacturer;
+                $_manufacturer['sort_order'] = 0;
+                if (count($product_store)) {
+                    $_manufacturer['manufacturer_store'] = $product_store;
+                }
+                $_manufacturer['manufacturer_id'] = $this->model_catalog_manufacturer->addManufacturer($_manufacturer);
+            }
+
+            return $_manufacturer['manufacturer_id'];
+        }
+        return 0;
+    }
+
+    /*========= connect Kiotviet function =========*/
+    /**
+     * @param string $client_id
+     * @param string $client_secret
+     * @return bool|mixed
+     */
+    public function getAccessToken($client_id = '', $client_secret = '')
+    {
+        if (!$client_id)
+            $client_id = $this->client_id;
+
+        if (!$client_secret)
+            $client_secret = $this->client_secret;
+
+        $url = 'https://id.kiotviet.vn/connect/token';
+
+        $data = array(
+            'scopes' => 'PublicApi.Access',
+            'grant_type' => 'client_credentials',
+            'client_id' => $client_id,
+            'client_secret' => $client_secret
+        );
+
+        $params['header'] = array('Content-Type' => 'application/x-www-form-urlencoded');
+
+        $resp = json_decode($this->curl->post($url, $data, $params), JSON_OBJECT_AS_ARRAY);
+
+        if (!isset($resp['access_token']) || empty($resp['access_token'])) {
+            $this->error['getAccessToken'][] = 'Can\'t get Access token';
+            return false;
+        }
+
+        return $resp['access_token'];
+    }
+
+    /**
+     * Lay danh sach chi nhanh
+     * @return array|mixed
+     */
+    public function getBranches()
+    {
+        $url = $this->url . '/branches';
+
+        $params['header'] = array(
+            'Content-Type: application/x-www-form-urlencoded',
+            'Retailer:' . $this->retailer,
+            'Authorization:' . $this->authorization
+        );
+
+        $resp = json_decode($this->curl->get($url, $params), JSON_OBJECT_AS_ARRAY);
+
+        if (!isset($resp['data']) || empty($resp['data'])) {
+            return array();
+        }
+
+        return $resp['data'];
+    }
+
+    /**
+     * Lay danh sach nguoi dung
+     * @return array|mixed
+     */
+    public function getUsers()
+    {
+        $url = $this->url . '/users';
+
+        $params['header'] = array(
+            'Content-Type:application/x-www-form-urlencoded',
+            'Retailer:' . $this->retailer,
+            'Authorization:' . $this->authorization
+        );
+
+        $resp = json_decode($this->curl->get($url, $params), JSON_OBJECT_AS_ARRAY);
+
+        if (!isset($resp['data']) || empty($resp['data'])) {
+            return array();
+        }
+
+        return $resp['data'];
+    }
+
+    /**
+     * @return int|mixed
+     */
+    private function getTotalProducts()
+    {
+        $url = $this->url . '/products?pageSize=100';
+
+        $params['header'] = array(
+            'Content-Type:application/x-www-form-urlencoded',
+            'Retailer:' . $this->retailer,
+            'Authorization:' . $this->authorization
+        );
+
+        $resp = json_decode($this->curl->get($url, $params), JSON_OBJECT_AS_ARRAY);
+
+        if (!isset($resp['total']) || empty($resp['total'])) {
+            $this->error['getTotalProducts'][] = 'Total product is 0';
+            return 0;
+        }
+
+        return $resp['total'];
+    }
+
+    /**
+     * @return array
+     */
+    function getProducts()
+    {
+        $total_products = $this->getTotalProducts();
+
+        if ($total_products == 0) {
+            return array();
+        }
+
+        $pageSize = 100;
+
+        $num_page = ceil($total_products / $pageSize);
+
+        $products = array();
+
+        for ($i = 0; $i < $num_page; $i++) {
+
+            $url = $this->url . '/Products?includeInventory=true&pageSize=' . $pageSize . '&currentItem=' . $i * $pageSize;
+
+            $params['header'] = array(
+                'Content-Type:application/x-www-form-urlencoded',
+                'Retailer:' . $this->retailer,
+                'Authorization:' . $this->authorization
+            );
+
+            $resp = json_decode($this->curl->get($url, $params), JSON_OBJECT_AS_ARRAY);
+
+            if (!empty($resp['data'])) {
+                foreach ($resp['data'] as $_product) {
+                    if (isset($_product['inventories']) && $_product['inventories']) {
+                        $_product['branchName'] = $_product['inventories'][0]['branchName'];
+                        $_product['cost'] = $_product['inventories'][0]['cost'];
+                        $_product['onHand'] = $_product['inventories'][0]['onHand'];
+                        $_product['maxQuantity'] = $_product['inventories'][0]['maxQuantity'];
+                        unset($_product['inventories']);
+                    }
+                    $products[] = $_product;
+                }
+            } else {
+                $this->error['getProducts'][] = 'Can\'t get product infor';
+            }
+        }
+
+        return $products;
+    }
+
+    /**
+     * @param string $product_id
+     * @param string $type
+     * @return bool|mixed|null
+     */
+    function getProduct($product_id = '', $type = 'id')
+    {
+        // if type not 'id' or 'code', dont do anything
+        if (strtolower($type) != 'id' && strtolower($type) != 'code') {
+            return false;
+        } else {
+            if (strtolower($type) == 'code') {
+                $url = $this->url . '/Products/code/' . $product_id;
+            } else {
+                $url = $this->url . '/Products/' . $product_id;
+            }
+            $params['header'] = array(
+                'Content-Type:application/x-www-form-urlencoded',
+                'Retailer:' . $this->retailer,
+                'Authorization:' . $this->authorization
+            );
+            $product = json_decode($this->curl->get($url, $params), JSON_OBJECT_AS_ARRAY);
+
+            if (isset($product['inventories']) && $product['inventories']) {
+                $product['branchName'] = $product['inventories'][0]['branchName'];
+                $product['cost'] = $product['inventories'][0]['cost'];
+                $product['onHand'] = $product['inventories'][0]['onHand'];
+                $product['maxQuantity'] = $product['inventories'][0]['maxQuantity'];
+                unset($product['inventories']);
+            }
+            // code or id is not exist, kiotviet will return error messege
+
+            return $product;
+        }
+    }
+
+    /**
+     * @return int|mixed
+     */
+    private function getTotalCategories()
+    {
+        $url = $this->url . '/categories?pageSize=1&hierachicalData=false';
+
+        $params['header'] = array(
+            'Content-Type:application/x-www-form-urlencoded',
+            'Retailer:' . $this->retailer,
+            'Authorization:' . $this->authorization
+        );
+
+        $resp = json_decode($this->curl->get($url, $params), JSON_OBJECT_AS_ARRAY);
+
+        if (!isset($resp['total']) || empty($resp['total'])) {
+            return 0;
+        }
+
+        return $resp['total'];
+    }
+
+    /**
+     * @return array
+     */
+    private function getCategories()
+    {
+        $total_categories = $this->getTotalCategories();
+
+        if ($total_categories == 0) {
+            return array();
+        }
+
+        $pageSize = 30;
+
+        $num_page = ceil($total_categories / $pageSize);
+
+        $categories = array();
+
+        for ($i = 0; $i < $num_page; $i++) {
+
+            $url = $this->url . '/categories?hierachicalData=false&pageSize=' . $pageSize . '&currentItem=' . $i * $pageSize;
+
+            $params['header'] = array(
+                'Content-Type:application/x-www-form-urlencoded',
+                'Retailer:' . $this->retailer,
+                'Authorization:' . $this->authorization
+            );
+
+            $resp = json_decode($this->curl->get($url, $params), JSON_OBJECT_AS_ARRAY);
+
+            if (!empty($resp['data'])) {
+                foreach ($resp['data'] as $_category) {
+                    $categories[] = $_category;
+                }
+            }
+        }
+
+        return $categories;
+    }
+
+    /**
+     * @param $category_id
+     * @return bool|mixed|null
+     */
+    private function getCategory($category_id)
+    {
+        $url = $this->url . '/categories/' . $category_id;
+
+        $params['header'] = array(
+            'Content-Type:application/x-www-form-urlencoded',
+            'Retailer:' . $this->retailer,
+            'Authorization:' . $this->authorization
+        );
+
+        $resp = json_decode($this->curl->get($url, $params), JSON_OBJECT_AS_ARRAY);
+
+        if (isset($resp['categoryId'])) {
+            return false;
+        }
+
+        return $resp;
+    }
+
+    /**
+     * @param $url
+     * @return bool|string
+     */
+    private function getImage($url)
+    {
+        if (!defined('DIR_IMAGE')) {
+            return false;
+        }
+
+        $url_explode = explode('/', trim($url));
+        $image_name = (string)end($url_explode);
+        $kiotviet_image = DIR_IMAGE . 'catalog/' . $this->retailer;
+
+        if (count(explode('.', $image_name)) == 1 || !preg_match('/(.*)(.png|.jpg|.jpeg|.gif)$/', $image_name, $output)) {
+            $image_name .= '.png';
+        }
+
+        if (!file_exists($kiotviet_image)) {
+            mkdir($kiotviet_image, 0755, true);
+        }
+
+        if (!file_exists($kiotviet_image . '/' . $image_name)) {
+            $content = file_get_contents($url);
+            file_put_contents($kiotviet_image . '/' . $image_name, $content);
+        }
+
+        return 'catalog/' . $this->retailer . '/' . $image_name;
+    }
+
+    /**
+     * @return array|mixed
+     */
+    private function getBranch()
+    {
+        $branches = $this->getBranches();
+        if (!$this->branch_id && isset($branches[0]['id'])) {
+            return $branches[0]['id'];
+        }
+
+        return $this->branch_id;
+    }
+
+    /**
+     * @return array|mixed
+     */
+    private function getUser()
+    {
+        $users = $this->getUsers();
+        if (!$this->user_id && isset($users[0]['id'])) {
+            return $users[0]['id'];
+        }
+
+        return $this->user_id;
+    }
+
+    /*========= addition function =========*/
+    /**
+     * @param array $datas
+     * @param \string[][] $options
+     * @return array
+     */
+    private function _searchArray($datas = array(), $options = array(array('key' => '', 'value' => '')))
+    {
+        foreach ($options as $option) {
+            if ($option['key'] && $option['value']) {
+                $temp = array();
+                foreach ($datas as $key => $data) {
+                    if (isset($data[$option['key']]) && $data[$option['key']] == $option['value']) {
+                        $temp[$key] = $data;
+                    }
+                }
+                $datas = $temp;
+            }
+        }
+
+        return $datas;
+    }
+
+    /**
+     * @param $action
+     * @param $data
+     */
+    private function log($action, $data)
+    {
+        $myfile = fopen($this->filename, "a") or die("Unable to open file!");
+        $content = date('Y-m-d H:i:s | ') . $action. ": " . json_encode($data);
+        fwrite($myfile, $content . "\n");
+
+        fclose($myfile);
+    }
+}

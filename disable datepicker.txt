@@ -1,0 +1,56 @@
+<script type="text/javascript">
+    $(document).ready(function(){
+        var days = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+        var unavailableDates =  ["2022/06/12","2022/06/11","2022/06/10","2022/06/09","2022/06/08","2022/06/07"]; // yyyy/MM/dd
+        // var unavailableDays = ["SundaySunday"];
+        var unavailableDays = [""];
+        
+        function unavailable(date) {
+            ymd = date.getFullYear() + "/" + ("0"+(date.getMonth()+1)).slice(-2) + "/" + ("0"+date.getDate()).slice(-2);
+            day = new Date(ymd).getDay();
+            if ($.inArray(ymd, unavailableDates) < 0 && $.inArray(days[day], unavailableDays) < 0) {
+                return [true, "enabled", "Book Now"];
+            } else {
+                return [false,"disabled","Booked Out"];
+            }
+        }
+        
+        /* range date */
+        // var startDate = "2021-10-11", // some start date
+        //     endDate  = "2021-10-25",  // some end date
+        //     dateRange = [];           // array to hold the range
+        
+        // // populate the array
+        // for (var d = new Date(startDate); d <= new Date(endDate); d.setDate(d.getDate() + 1)) {
+        //     dateRange.push($.datepicker.formatDate('yy-mm-dd', d));
+        // }
+        
+        // use this array 
+        
+        // disable not range
+        // var unavailableDates = ["25-12-2021", "1-1-2022"];
+
+        // function available(date) {
+        //   var dmy = date.getDate() + "-" + (date.getMonth() + 1) + "-" + date.getFullYear();
+        
+        //   if ($.inArray(dmy, unavailableDates) == -1) {
+        //     return [true, "", "Available"];
+        //   } else {
+        //     return [false, "", "unAvailable"];
+        //   }
+        // }
+        
+        
+        // datepicker
+        $(".datepicker").datepicker({
+            dateFormat: 'dd/mm/yy',
+            autoclose: true, 
+            todayHighlight: true,
+            // beforeShowDay: function (date) {
+            //     var dateString = jQuery.datepicker.formatDate('yy-mm-dd', date);
+            //     return [dateRange.indexOf(dateString) == -1];
+            // }
+            beforeShowDay: unavailable
+        });
+    });
+</script>

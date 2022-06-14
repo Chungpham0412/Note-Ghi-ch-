@@ -1,0 +1,30 @@
+    .footer-top{
+        background: url(image/<?php echo $background; ?>);
+        background-size: cover;
+        height: 100%;
+        position: relative;
+        z-index: 2;
+    }
+    .footer-container {
+        position: relative;
+        z-index: 2;
+    }
+    .footer-top:after {
+        position: absolute;
+        content: "";
+        left: 0;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        background: rgba(34,51,40,.75);
+        z-index:-1;
+    }
+    .footer-container .footer-top .footer-static{
+          color: #fff;
+    }
+    .footer-container .footer-top .footer-static *{
+          color: #fff!important;
+    }
+    .footer-container .footer-top .footer-static i{
+      color: #ABD140!important;
+    }
