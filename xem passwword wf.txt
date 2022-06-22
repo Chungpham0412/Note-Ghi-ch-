@@ -1,0 +1,4 @@
+Lệnh: netsh wlan show profile
+
+Lệnh: netsh wlan show profile tên-mạng-muốn-xem key=clear
+
