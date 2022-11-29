@@ -1,0 +1,32 @@
+Chung Phạm, [8/26/2022 4:40 PM]
+<div class="social-buttons">
+    
+    <div class="zalo-share-button" data-href="<?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]";?>" data-oaid="579745863508352884" data-layout="2" data-color="blue" data-customize="true">
+        <img alt="Chia sẻ lên Zalo" width="25" src="/catalog/view/theme/default/image/social/zalo.png">
+    </div>
+</div>
+
+<style type="text/css">
+    .social-buttons {
+        display: flex;
+        width: 100%;
+    }
+    .social-buttons a {
+        display: inline-block;
+        border-radius: 5px;
+    }
+    .zalo-share-button{
+      position: relative;
+      display:block!important;
+      width: 30px!important;
+      height:30px;
+    }
+    .social-buttons a{
+      min-width:30px;
+      height:30px;
+    }
+</style>
+<script src="https://sp.zalo.me/plugins/sdk.js"></script>
+
+Chung Phạm, [8/26/2022 4:40 PM]
+https://developers.zalo.me/docs/social/share
